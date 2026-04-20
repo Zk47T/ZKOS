@@ -1,120 +1,117 @@
-# Bài 2: UART Echo — Input/Output
+Ở bài trước, mình đã in được ký tự Z ra serial console. Bài này mình sẽ làm ngược lại, nhận ký tự từ bàn phím và gửi trả lại (echo). Đây là bước đầu để làm shell sau này.
 
-## Mục tiêu
+1. Bài này cần gì thêm từ RM?1.1 Thêm bit RDRF để nhận data1.2 DATA register đọc vs ghi2. Code C2.1 uart_getc() — nhận ký tự2.2 uart_puts() — in chuỗi2.3 Echo loop với line buffer3. Vụ \r\n4. Output mong đợi5. Polling I/O
 
-Nhận ký tự từ serial → gửi lại. Hoàn thiện UART driver với cả TX (truyền) và RX (nhận).
+1. Bài này cần gì thêm từ RM?
 
-## Tiến triển so với Bài 1
+1.1 Thêm bit RDRF để nhận data
 
-| Bài 1 | Bài 2 |
-|-------|-------|
-| Chỉ TX (gửi 'Z') | TX + RX (nhận ký tự, gửi lại) |
-| Pure ASM hoặc single `*DATA = 'Z'` | Functions: `uart_putc`, `uart_getc`, `uart_puts` |
-| In 1 ký tự rồi dừng | Loop vô hạn, interactive |
-| 40 bytes | 440+ bytes |
+Bài 1 mình chỉ dùng 1 bit trong STAT register: TDRE (bit 23) để biết khi nào gửi được. Bài này cần thêm 1 bit nữa: RDRF (bit 21)
 
-## Kiến thức mới từ RM
+Vẫn là RM Chapter 62, STAT register:
+- Bit 23: TDRE (Transmit Data Register Empty) — 1 = có thể gửi byte
+- Bit 21: RDRF (Receive Data Register Full) — 1 = có byte mới để đọc
 
-### STAT register — thêm bit 21 (RDRF)
+1.2 DATA register đọc vs ghi
 
-**RM Chapter 62 — LPUART, STAT register:**
+Cái hay ở đây là cùng 1 register DATA (offset 0x1C), nhưng đọc và ghi sẽ khác nhau:
+- Ghi vào DATA (*data = 'Z') → gửi byte qua TX pin → serial console
+- Đọc từ DATA (char c = *data) → nhận byte từ RX pin ← bàn phím user
 
-| Bit | Tên | Ý nghĩa | Dùng khi |
-|-----|------|---------|---------|
-| 23 | TDRE | Transmit Data Register Empty | Gửi byte — chờ bit này = 1 |
-| 21 | RDRF | Receive Data Register Full | Nhận byte — chờ bit này = 1 |
+Đây là pattern phổ biến trong MMIO (Memory-Mapped I/O): cùng address, read/write làm việc khác nhau.
 
-Bài 1 chỉ dùng TDRE (TX). Bài 2 thêm RDRF (RX) — cùng register, khác bit.
+2. Code C
 
-### DATA register — đọc vs ghi
+Các bạn có thể tham khảo tại 2-uart-echo
 
-Cùng 1 register `DATA` @ offset `0x1C`, nhưng hành vi khác nhau:
+Mình giữ nguyên stub.S và Makefile từ bài 1 c-lang, chỉ thay main.c
 
-| Thao tác | Kết quả |
-|----------|---------|
-| **Ghi** (`*DATA = 'Z'`) | Gửi byte qua TX pin → serial console |
-| **Đọc** (`char c = *DATA`) | Nhận byte từ RX pin ← bàn phím user |
+2.1 uart_getc() — nhận ký tự
 
-Đây là pattern phổ biến trong MMIO: cùng address, read/write làm khác nhau.
-
-## Code giải thích
-
-### `uart_getc()` — function mới
-
-```c
-#define RDRF_BIT (1 << 21)    // RM Ch.62: STAT bit 21
+#define RDRF_BIT (1 << 21)
 
 char uart_getc(void)
 {
-    while ((*STAT & RDRF_BIT) == 0);   // chờ có data từ RX
-    return *DATA;                       // đọc byte
+    while ((*stat & RDRF_BIT) == 0);
+    return *data;
 }
-```
 
-So sánh với `uart_putc()`:
-
-```c
-#define TDRE_BIT (1 << 23)    // RM Ch.62: STAT bit 23
+Nếu bạn so sánh với uart_putc() ở bài 1:
 
 void uart_putc(char c)
 {
-    while ((*STAT & TDRE_BIT) == 0);   // chờ TX sẵn sàng
-    *DATA = c;                          // ghi byte
+    while ((*stat & TDRE_BIT) == 0);
+    *data = c;
 }
-```
 
-Cấu trúc giống hệt: chờ status bit → access DATA. Một bên đọc, một bên ghi.
+Cấu trúc y hệt: chờ status bit → access DATA. Một bên đọc, một bên ghi. Nếu hiểu uart_putc thì uart_getc cũng tương tự thôi.
 
-### `uart_puts()` — in chuỗi
+2.2 uart_puts() — in chuỗi
 
-```c
 void uart_puts(const char *s)
 {
     while (*s)
         uart_putc(*s++);
 }
-```
 
-Duyệt từng ký tự cho đến `\0` (null terminator). Đơn giản nhưng bắt buộc — bare-metal không có `printf`.
+Bare-metal không có printf, nên muốn in chuỗi thì phải tự viết. Đơn giản duyệt từng ký tự cho đến null terminator.
 
-### Line buffer + echo loop
+Lưu ý vì có string constant ("Welcome to ZKOS!\r\n") nên gcc sẽ đặt nó vào section .rodata. Do đó linker script phải thêm dòng:
 
-```c
-char buf[64];
-int i = 0;
+.rodata : { *(.rodata*) }
 
-while (1) {
-    char c = uart_getc();        // nhận 1 ký tự
-    if (c == '\r') {             // Enter pressed
-        buf[i] = '\0';          // kết thúc chuỗi
-        // in kết quả
-        uart_puts("[RX] ");
-        uart_puts(buf);          // hiển thị dòng đã nhận
-        uart_puts("[TX] ");
-        uart_puts(buf);          // gửi lại (echo)
-        i = 0;                  // reset buffer cho dòng mới
-    } else {
-        uart_putc(c);            // echo từng ký tự khi gõ
-        buf[i++] = c;            // lưu vào buffer
+Bài 1 asm không có string nên không cần. Bài 1 c-lang thì chỉ có 'Z' (ký tự, không phải string) nên cũng không cần. Bài này bắt đầu cần.
+
+2.3 Echo loop với line buffer
+
+void main(void)
+{
+    char buf[64];
+    int i = 0;
+    uart_puts("Welcome to ZKOS!\r\n");
+    uart_puts("ZKOS> ");
+    while (1) {
+        char c = uart_getc();
+        if (c == '\r') {
+            buf[i] = '\0';
+            uart_puts("\r\n");
+            uart_puts("[RX] ");
+            uart_puts(buf);
+            uart_puts("\r\n");
+            uart_puts("[TX] ");
+            uart_puts(buf);
+            uart_puts("\r\n");
+            uart_puts("ZKOS> ");
+            i = 0;
+        } else {
+            uart_putc(c);
+            if (i < 63)
+                buf[i++] = c;
+        }
     }
 }
-```
 
-### Tại sao `\r\n` thay vì chỉ `\n`?
+Ở đây mình không echo từng ký tự rồi thôi, mà buffer cả dòng lại. Khi user ấn Enter (\r), mình in ra [RX] (đã nhận) và [TX] (gửi lại). Cái line buffer này chính là nền tảng cho shell sau này, thay vì echo lại thì mình sẽ parse command.
 
-Serial terminal cần cả hai:
+3. Vụ \r\n
 
-| Ký tự | ASCII | Hành vi |
-|-------|-------|---------|
-| `\r` (CR) | 0x0D | Đưa con trỏ về **đầu dòng** |
-| `\n` (LF) | 0x0A | Đưa con trỏ **xuống 1 dòng** |
+Khi bạn ấn Enter trên serial terminal (minicom, picocom), terminal gửi \r (0x0D = Carriage Return).
 
-Chỉ `\n` → con trỏ xuống nhưng không về đầu → text bị lệch.
-Di sản từ máy đánh chữ: CR = kéo đầu in sang trái, LF = cuộn giấy lên.
+Nhưng để con trỏ xuống dòng đúng trên terminal, cần gửi cả hai:
+- \r (CR): đưa con trỏ về đầu dòng
+- \n (LF): đưa con trỏ xuống 1 dòng
 
-## Output mong đợi
+Nếu chỉ gửi \n thì con trỏ xuống dòng nhưng không về đầu, text sẽ bị lệch sang phải. Đây là di sản từ thời máy đánh chữ: carriage return = kéo đầu in về trái, line feed = cuộn giấy lên.
 
-```
+4. Output mong đợi
+
+Make rồi flash vào board:
+
+sudo ./scripts/flash.sh blob/flash.bin boot/2-uart-echo/zkos.bin /dev/sdX
+
+Ta sẽ thấy:
+
+## Starting application at 0x80400000 ...
 Welcome to ZKOS!
 ZKOS> hello
 [RX] hello
@@ -123,46 +120,13 @@ ZKOS> world
 [RX] world
 [TX] world
 ZKOS> 
-```
 
-## Cấu trúc file
+5. Polling I/O
 
-```
-boot/2-uart-echo/
-├── stub.S      ← giống Bài 1 c-lang: set SP, call main
-├── main.c      ← uart_putc + uart_getc + uart_puts + echo loop
-├── zkos.ld     ← thêm .rodata (cho string constants)
-└── Makefile    ← gcc + as + ld + objcopy
-```
+Code hiện tại dùng polling: CPU liên tục check STAT register trong vòng lặp while. Trong khi chờ user gõ, CPU chạy 100% chỉ để hỏi "có data chưa? có data chưa?"
 
-### Tại sao linker script thêm `.rodata`?
+Tạm thời thì ok cho bài học, nhưng production thì không. Bài sau mình sẽ dần chuyển sang interrupt-driven I/O: CPU ngủ, UART tự đánh thức CPU khi có data.
 
-```ld
-.text   : { *(.text*) }
-.rodata : { *(.rodata*) }     ← MỚI
-```
+Ngoài ra thì board cũng sẽ tự reset sau ~40s do watchdog (WDOG3). Vụ này mình sẽ xử lý ở bài sau luôn.
 
-Bài 1 (ASM) không có string → không cần `.rodata`.
-Bài 2 có `"Welcome to ZKOS!\r\n"` → gcc đặt string vào section `.rodata`.
-Không có dòng này → string mất → `uart_puts` in rác.
-
-## Polling I/O — hạn chế
-
-Code hiện tại dùng **polling**: CPU liên tục kiểm tra `STAT` trong vòng lặp `while`.
-Trong khi chờ user gõ, CPU chạy 100% chỉ để hỏi "có data chưa? có data chưa?"
-
-Bài 7 (Interrupts) sẽ chuyển sang **interrupt-driven I/O**: CPU ngủ, UART tự đánh thức CPU khi có data.
-
-## Bài học rút ra
-
-1. **Cùng register, read/write khác nhau** — DATA register: ghi = TX, đọc = RX
-2. **Polling = đơn giản nhưng lãng phí CPU** — OK cho bài học, không OK cho production
-3. **Line buffer là nền tảng shell** — Bài 4 sẽ thay echo bằng command parsing
-4. **`\r\n` bắt buộc với serial** — convention từ thời phần cứng cơ khí
-
-## Tài liệu đã dùng
-
-| Tài liệu | Phần | Nội dung |
-|-----------|------|---------|
-| i.MX93 RM | Ch.62 LPUART | STAT bit 21 (RDRF), DATA register read behavior |
-| Stanford bare-metal guide | gcc flags | Tái khẳng định -ffreestanding, -nostdlib |
+Ở bài tới, mình sẽ tách code ra thành nhiều file (uart.c, string.c) cho gọn, rồi bắt đầu làm shell đơn giản — gõ "help" ra danh sách lệnh, "hello" ra chào.
