@@ -63,16 +63,19 @@ PART="${DEVICE}p1"
 echo "[4/5] Formatting $PART as FAT32..."
 mkfs.fat -F 32 -n ZKOS $PART > /dev/null
 
-# Copy zkos binary
-echo "[5/5] Copying zkos-minimal.bin..."
+# Copy zkos binary + boot script
+echo "[5/6] Generating boot.scr..."
+BOOT_CMD="$REPO_DIR/scripts/boot.cmd"
+mkimage -A arm64 -T script -C none -d $BOOT_CMD $REPO_DIR/scripts/boot.scr > /dev/null
+
+echo "[6/6] Copying files to FAT32..."
 MOUNT=$(mktemp -d)
 mount $PART $MOUNT
 cp $ZKOS_BIN $MOUNT/zkos-minimal.bin
+cp $REPO_DIR/scripts/boot.scr $MOUNT/boot.scr
 sync
 umount $MOUNT
 rmdir $MOUNT
 
 echo ""
-echo "Done! On U-Boot run:"
-echo "  fatload mmc 1:1 0x80400000 zkos-minimal.bin"
-echo "  go 0x80400000"
+echo "Done! Board will auto-boot ZKOS (no manual commands needed)."
