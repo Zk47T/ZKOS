@@ -16,7 +16,7 @@ fi
 
 REPO_DIR=$(dirname "$(realpath "$0")")/..
 FLASH_BIN="$REPO_DIR/blob/flash.bin"
-ZKOS_BIN="$REPO_DIR/boot/minimal/asm-lang/zkos-minimal.bin"
+ZKOS_BIN="$REPO_DIR/boot/1-minimal/asm-lang/zkos-minimal.bin"
 
 if [ ! -f "$FLASH_BIN" ]; then
     echo "Error: flash.bin not found at $FLASH_BIN"
@@ -25,7 +25,7 @@ fi
 
 if [ ! -f "$ZKOS_BIN" ]; then
     echo "Building zkos-minimal.bin..."
-    make -C "$REPO_DIR/boot/minimal/asm-lang"
+    make -C "$REPO_DIR/boot/1-minimal/asm-lang"
 fi
 
 echo ""
